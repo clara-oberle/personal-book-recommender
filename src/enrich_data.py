@@ -1,6 +1,23 @@
-import httpx, json, time, datetime
+import httpx, json, time, datetime, re
+import pandas as pd
+from data.api_key import API_KEY
 
 CACHE_FILE = "data/enriched/enriched_books.json"
+NOT_ENRICHED_FILE = "data/enriched/not_enriched_books.json"
+
+def load_json_file(filename):
+    try:
+        with open(filename, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+
+def save_json_file(filename, data):
+    with open(filename, "w") as f:
+        json.dump(data, f, indent=4)
+
+def clean_title(title):
+    return re.sub(r"\s*\(.*?#\d+\)\s*$", "", title).strip()
 
 def fetch_google_books(isbn13, title, author):
     '''
@@ -8,42 +25,72 @@ def fetch_google_books(isbn13, title, author):
     if no ISBN or no result, falls back to q=intitle:{title}+inauthor:{author}
     '''
     if isbn13:
-        get_response = httpx.get("https://www.googleapis.com/books/v1/volumes?q=isbn:{isbn13}")
+        params = {"q": f"isbn:{isbn13}", "key": API_KEY}
+
+        try: 
+            get_response = httpx.get("https://www.googleapis.com/books/v1/volumes", params=params)
+        except httpx.HTTPError:
+            return {"description": None, "categories": None, "match_type": None, "found": False}
 
         if get_response.status_code == 200:
             data = get_response.json()
 
             if data["totalItems"] > 0:
 
-                print(f"Fetch google_books with ISBN succesful for book: {title}")
+                print(f"Fetch google_books with ISBN succesful for book: {title}\n")
 
+                for item in data["items"]:
+                    volume_info = item["volumeInfo"]
 
-                description = data["items"][0]["volumeInfo"]["description"]
-                categories = data["items"][0]["volumeInfo"]["categories"]
+                    description = volume_info.get("description")
+                    categories = volume_info.get("categories")
 
-                # Return structure is: description, categories, was isbn used?, was title and author used?
-                return description, categories, True, False
+                    if description or categories:
+                        return {
+                            "description": description,
+                            "categories": categories,
+                            "match_type": "isbn",
+                            "found": True
+                        }
 
     # is no isbn, status code is not 200 or total items was 0:
-    params = {"q": f"intitle:{title} inauthor:{author}"}
+    cleaned_title = clean_title(title)
 
-    response = httpx.get("https://www.googleapis.com/books/v1/volumes", params=params)
+    params = {"q": f"intitle:{cleaned_title} inauthor:{author}", "key": API_KEY}
+
+    try:
+        response = httpx.get("https://www.googleapis.com/books/v1/volumes", params=params)
+    except httpx.HTTPError:
+        return {
+            "description": None,
+            "categories": None,
+            "match_type": None,
+            "found": False
+        }
 
     if response.status_code == 200:
         data = response.json()
         
         if data["totalItems"] > 0:
 
-            print(f"Fetch google_books with title and author succesful for book: {title}")
-
+            print(f"Fetch google_books with title and author succesful for book: {title}\n")
 
             description = data["items"][0]["volumeInfo"]["description"]
             categories = data["items"][0]["volumeInfo"]["categories"]
 
-            # Return structure is: description, categories, was isbn used?, was title and author used?
-            return description, categories, False, True
+            return {
+                "description": description,
+                "categories": categories,
+                "match_type": "title",
+                "found": True
+            }
         
-    return None, None, False, False
+    return {
+            "description": None,
+            "categories": None,
+            "match_type": None,
+            "found": False
+        }
 
 def fetch_open_library(isbn13, title, author):
     """
@@ -67,8 +114,16 @@ def fetch_open_library(isbn13, title, author):
             "jscmd": "data"
         }
 
-        response = httpx.get(url, params=params)
-
+        try:
+            response = httpx.get(url, params=params)
+        except httpx.HTTPError:
+            return {
+                "description": None,
+                "subjects": None,
+                "match_type": None,
+                "found": False
+            }
+        
         if response.status_code == 200:
             data = response.json()
             bibkey = f"ISBN:{isbn13}"
@@ -77,24 +132,31 @@ def fetch_open_library(isbn13, title, author):
                 book = data[bibkey]
 
                 print(
-                    f"Fetch Open Library with ISBN successful for book: {title}"
-                )
+                    f"Fetch Open Library with ISBN successful for book: {title}\n")
 
                 description = book.get("description")
-                categories = book.get("subjects")
+                subjects = book.get("subjects")
 
-                return description, categories, True, False
+                return {
+                    "description": description,
+                    "subjects": subjects,
+                    "match_type": "isbn",
+                    "found": True
+                }
 
     # ISBN missing or ISBN lookup failed → title + author fallback
-    params = {
-        "title": title,
-        "author": author
-    }
+    cleaned_title = clean_title(title)
+    params = {"title": cleaned_title, "author": author, "fields": "title,author_name,subject,description"}
 
-    response = httpx.get(
-        "https://openlibrary.org/search.json",
-        params=params
-    )
+    try:
+        response = httpx.get("https://openlibrary.org/search.json", params=params)
+    except httpx.HTTPError:
+        return {
+            "description": None,
+            "subjects": None,
+            "match_type": None,
+            "found": False
+        }
 
     if response.status_code == 200:
         data = response.json()
@@ -104,91 +166,106 @@ def fetch_open_library(isbn13, title, author):
 
             print(
                 f"Fetch Open Library with title and author successful "
-                f"for book: {title}"
-            )
+                f"for book: {title}\n")
 
             description = book.get("description")
-            categories = book.get("subject")
+            subjects = book.get("subject")
 
-            return description, categories, False, True
+            return {
+                "description": description,
+                "subjects": subjects,
+                "match_type": "title",
+                "found": True
+            }
 
-    return None, None, False, False
+    return {
+        "description": None,
+        "subjects": None,
+        "match_type": None,
+        "found": False
+    }
 
-def enrich_book(row, cache):
+def enrich_book(row):
     '''
     checks cache by Book Id first; if present, skip; otherwise calls both fetchers, 
     merges into one cache entry, 
     handles either API failing independently (one being down/empty shouldn't block the other), 
     writes back to cache.
     '''
+    data = load_json_file(CACHE_FILE)
+    not_enriched = load_json_file(NOT_ENRICHED_FILE)
 
-    with open(CACHE_FILE, "r") as f:
-        data = json.load(f)
-
-    book_id = row["Book Id"]
+    book_id = str(row["Book Id"])
     isbn13 = row["ISBN13"]
     title = row["Title"]
     author= row["Author"]
+    
+    if pd.isna(isbn13):
+        isbn13 = None
+    else:
+        isbn13 = str(isbn13)
 
     if book_id in data:
-        print(f"Book {row["Title"]} already in cache file")
+        print(f"Book {title} already in cache file\n")
         return
 
+    if book_id in not_enriched:
+        print(f"Book '{title}' already in not-enriched cache.\n")
+        return
+
+    time.sleep(0.5)
+
     print(f"Fetching google books... \n")
-    description_google_books, categories_google_books, isbn_used_google_books, title_used_google_books = fetch_google_books(isbn13, title, author)
+    google_result = fetch_google_books(isbn13, title, author)
 
     time.sleep(0.5)
 
     print(f"Fetching open library... \n")
-    description_open_lib, categories_open_lib, isbn_used_open_lib, title_used_open_lib = fetch_open_library(isbn13, title, author)
+    open_lib_result = fetch_open_library(isbn13, title, author)
 
-    book_id = str(book_id)
-    if isbn_used_google_books:
-        match_type_google_book = "isbn"
-        found_google_books = True
-    elif title_used_google_books:
-        match_type_google_book = "title"
-        found_google_books = True
-    else:
-        match_type_google_book = None
-        found_google_books = False
+    google_has_data = (google_result["description"] is not None or google_result["categories"] is not None)
 
-    if isbn_used_open_lib:
-        match_type_open_lib = "isbn"
-        found_open_lib = True
-    elif title_used_open_lib: 
-        match_type_open_lib = "title"
-        found_open_lib = True
-    else:
-        match_type_open_lib = None
-        found_open_lib = False
+    open_lib_has_data = (open_lib_result["description"] is not None or open_lib_result["subjects"] is not None)
 
-    cache = {
-        book_id: {
+    enriched = google_has_data or open_lib_has_data
+
+    if enriched:
+
+        data[book_id] = {
             "title": title,
-            "isbn13": isbn13, 
-            "google_books": {"description": description_google_books,
-                             "categories": categories_google_books,
-                             "match_type": match_type_google_book,
-                             "found": found_google_books},
-            "open_library": {"description": description_open_lib,
-                             "subjects": categories_open_lib,
-                             "match_type": match_type_open_lib,
-                             "found": found_open_lib},
-            "fetched_at": datetime.datetime
-                }
-    }
+            "isbn13": isbn13,
+            "google_books": google_result,
+            "open_library": open_lib_result,
+            "fetched_at": datetime.datetime.now().isoformat()
+        }
 
-    with open(CACHE_FILE, "w") as f:
-        json.dump(cache, f, indent=4)
+        save_json_file(CACHE_FILE, data)
 
-    print("Dumped cache into file. \n")
+        print(f"Enriched '{title}'")
+        print("Dumped data into enriched cache.\n")
+    else:
 
-    return
+        not_enriched[book_id] = {
+            "title": title,
+            "author": author,
+            "isbn13": isbn13,
+            "google_books": google_result,
+            "open_library": open_lib_result,
+            "failed_at": datetime.datetime.now().isoformat()
+        }
+
+        save_json_file(NOT_ENRICHED_FILE, not_enriched)
+
+        print(f"Could not enrich '{title}'\n")
 
 def main():
-    
-    return
+    df = pd.read_csv("data/clean/goodreads_clean.csv", dtype={"ISBN13": "string", "ISBN": "string"})
+
+    for index, row in df.iterrows():
+        print("Calling enrich_book \n")
+        enrich_book(row)
+        print("..............................................\n")
+    return 
 
 if __name__ == "__main__":
     main()

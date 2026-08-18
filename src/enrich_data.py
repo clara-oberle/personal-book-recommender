@@ -40,7 +40,7 @@ def fetch_google_books(isbn13, title, author):
                 print(f"Fetch google_books with ISBN succesful for book: {title}\n")
 
                 for item in data["items"]:
-                    volume_info = item["volumeInfo"]
+                    volume_info = item.get("volumeInfo", {})
 
                     description = volume_info.get("description")
                     categories = volume_info.get("categories")
@@ -75,16 +75,20 @@ def fetch_google_books(isbn13, title, author):
 
             print(f"Fetch google_books with title and author succesful for book: {title}\n")
 
-            description = data["items"][0]["volumeInfo"]["description"]
-            categories = data["items"][0]["volumeInfo"]["categories"]
+            for item in data["items"]:
+                volume_info = item.get("volumeInfo", {})
 
-            return {
-                "description": description,
-                "categories": categories,
-                "match_type": "title",
-                "found": True
-            }
-        
+                description = volume_info.get("description")
+                categories = volume_info.get("categories")
+
+                if description or categories:
+                    return {
+                        "description": description,
+                        "categories": categories,
+                        "match_type": "isbn",
+                        "found": True
+                    }
+                
     return {
             "description": None,
             "categories": None,
@@ -162,21 +166,22 @@ def fetch_open_library(isbn13, title, author):
         data = response.json()
 
         if data.get("numFound", 0) > 0:
-            book = data["docs"][0]
+            for book in data["docs"]:
+                description = book.get("description")
+                subjects = book.get("subject")
 
-            print(
-                f"Fetch Open Library with title and author successful "
-                f"for book: {title}\n")
+                if description or subjects:
+                    print(
+                        f"Fetch Open Library with title and author successful "
+                        f"for book: {title}\n"
+                    )
 
-            description = book.get("description")
-            subjects = book.get("subject")
-
-            return {
-                "description": description,
-                "subjects": subjects,
-                "match_type": "title",
-                "found": True
-            }
+                    return {
+                        "description": description,
+                        "subjects": subjects,
+                        "match_type": "title",
+                        "found": True
+                    }
 
     return {
         "description": None,

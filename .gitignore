@@ -7,5 +7,6 @@ data/raw/
 data/enriched/
 data/clean/
 data/api_key.py
+data/embedding/
 
 .env

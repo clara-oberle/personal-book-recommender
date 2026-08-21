@@ -9,10 +9,42 @@ ENRICHED_DATA_PATH = "data/enriched/enriched_books.json"
 EMBEDDING_DATA_PATH = "data/embedding/embedding_data.json"
 EMBEDDING_JOINED_DF_PATH = "data/embedding/embedding_join_clean_df.csv"
 
-def clean_html(text):
+
+def clean_description(text):
     if not text:
         return ""
-    return re.sub(r"<[^>]+>", " ", text).strip()
+
+    # Remove HTML
+    text = re.sub(r"<[^>]+>", " ", text)
+
+    # Remove bestseller mentions
+    text = re.sub(
+        r".*?(#1\s+New York Times Bestseller|USA Today Bestseller|New York Times Book Review|New York Times Bestseller).*?(\.|$)",
+        " ",
+        text,
+        flags=re.IGNORECASE
+    )
+
+    # Remove movie adaptation mentions
+    text = re.sub(
+        r".*?(Now a major motion picture|soon to be a movie|Set to be a major movie|New Movie Coming Soon from Amazon MGM Studios).*?(\.|$)",
+        " ",
+        text,
+        flags=re.IGNORECASE
+    )
+
+    # Remove TikTok mentions
+    text = re.sub(
+        r".*?TikTok Sensations?.*?(\.|$)",
+        " ",
+        text,
+        flags=re.IGNORECASE
+    )
+
+    # Clean up whitespace
+    text = re.sub(r"\s+", " ", text).strip()
+
+    return text
 
 def main():
     clean_df = pd.read_csv(DF_PATH)
@@ -49,10 +81,16 @@ def main():
             open_library_subjects = [subject["name"] 
                                      for subject in (open_library.get("subjects") or [])]
 
-            # combine and deduplicate categories, cap at 10
-            genre_signal = list(dict.fromkeys(google_categories + open_library_subjects))[:10]
+            # remove nyt:... tags
+            genre_signal = [
+                tag for tag in google_categories + open_library_subjects
+                if not re.match(r"^nyt:", tag, re.IGNORECASE)
+            ]
 
-            description = clean_html(description)
+            # combine and deduplicate categories, cap at 10
+            genre_signal = list(dict.fromkeys(genre_signal))[:10]
+            
+            description = clean_description(description)
 
             has_content = bool(description or genre_signal)
             if not has_content:

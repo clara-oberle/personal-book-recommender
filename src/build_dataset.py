@@ -9,6 +9,7 @@ ENRICHED_DATA_PATH = "data/enriched/enriched_books.json"
 EMBEDDING_DATA_PATH = "data/embedding/embedding_data.json"
 EMBEDDING_JOINED_DF_PATH = "data/embedding/embedding_join_clean_df.csv"
 
+TAGS_TO_REMOVE = {}
 
 def clean_description(text):
     if not text:
@@ -46,6 +47,47 @@ def clean_description(text):
 
     return text
 
+def is_valid_genre(tag):
+    tag_lower = tag.lower().strip()
+
+    if tag_lower.startswith("series:"):
+        return False
+
+    if tag_lower.startswith("translations"):
+        return False
+
+    if "language materials" in tag_lower:
+        return False
+
+    if tag_lower.startswith("reading level"):
+        return False
+
+    if tag_lower.startswith("ar "):
+        return False
+
+    # Bestseller / bestseller-list metadata
+    if tag_lower.startswith("new york times bestseller"):
+        return False
+    if tag_lower.startswith("usa today bestseller"):
+        return False
+    if tag_lower.startswith("new york times reviewed"):
+        return False
+
+    # Awards / prizes / medals
+    award_words = ["award", "prize", "medal"]
+
+    if any(word in tag_lower for word in award_words):
+        return False
+    
+    if tag_lower in {
+        "large type books",
+        "accelerated reader",
+        "protected daisy",
+    }:
+        return False
+
+    return True
+
 def main():
     clean_df = pd.read_csv(DF_PATH)
     enriched_data = load_json_file(ENRICHED_DATA_PATH)
@@ -81,10 +123,11 @@ def main():
             open_library_subjects = [subject["name"] 
                                      for subject in (open_library.get("subjects") or [])]
 
-            # remove nyt:... tags
+            # remove nyt:... tags and other tags (new york times bestseller)
             genre_signal = [
                 tag for tag in google_categories + open_library_subjects
-                if not re.match(r"^nyt:", tag, re.IGNORECASE)
+                if is_valid_genre(tag)
+                and not re.match(r"^nyt:", tag, re.IGNORECASE)
             ]
 
             # combine and deduplicate categories, cap at 10

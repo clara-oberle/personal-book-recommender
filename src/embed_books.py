@@ -9,8 +9,6 @@ BOOK_IDS_PATH = "data/embedding/book_ids.npy"
 def main():
     df = pd.read_csv(DATA_FOR_EMBEDDING)
 
-    data = {}
-
     book_id = df["Book Id"].astype(str).to_numpy()
     text = df["embedding_text"].tolist()
 

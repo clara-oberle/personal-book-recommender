@@ -51,7 +51,7 @@ def validate_knn(eligible_vectors, eligible_ratings, eligible_ids, mean_rating, 
             mean_rating, k=k, exclude_id=book_id, eligible_ids=eligible_ids
         )
         actual_deviation = eligible_ratings[i] - mean_rating
-        results.append({"book_id": book_id, "predicted": predicted, "actual": actual_deviation})
+        results.append({"Book Id": book_id, "predicted": predicted, "actual": actual_deviation})
     return pd.DataFrame(results)
 
 def score_to_read(to_read_df, to_read_vectors, eligible_vectors, eligible_ratings, mean_rating, k=5):

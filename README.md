@@ -1,134 +1,89 @@
 # Personal Book Intelligence
 
-A small machine-learning project built around my personal Goodreads reading data.
+A machine-learning project built around my own Goodreads reading history, an exploration of what my ratings actually say about my taste, and how far content-based recommendation can get with a small, personal, multilingual dataset.
 
-I'm a 3rd/4th year Computer Science / Data Science student, and I wanted a lightweight project where I could explore recommendation systems, NLP, and embeddings using data that actually matters to me.
+I'm a 3rd/4th year Computer Science / Data Science student. Rather than working through another generic Kaggle dataset, I wanted to apply recommendation systems, NLP, and embeddings to data that's actually mine, and to use the process to genuinely understand *why* these methods work, and where they break down, rather than just calling library functions.
 
-The goal is not to build a production recommendation system. Instead, I want to understand the interesting ML concepts by applying them to my own reading history.
+This is not a production recommender. It's a personal investigation: given ~185 books I've read and rated, can a system built from content embeddings and my own ratings tell me anything real about my taste, and what does it fail to capture?
 
-## Goals
+## What this project actually explores
 
-### 1. Understand my reading patterns
-
-Start with a short EDA phase using my Goodreads CSV:
-
-* Rating distribution
-* Reading pace over time
-* Genres and subjects
-* DNF patterns
-* Page count vs. rating
-* Rereads and read count
-* Other interesting patterns in my reading history
-
-The EDA is intentionally short — the main focus is the ML side of the project.
-
-### 2. Recommend books I will actually like
-
-Build a content-based recommendation system using book metadata.
-
-The planned approach is roughly:
-
-**Goodreads data → book metadata → text embeddings → representation of my taste → ranked book recommendations**
-
-Book descriptions and genre/subject information will be enriched using external book APIs and converted into embeddings with a pretrained `sentence-transformers` model.
-
-I'll then explore different ways of representing my preferences from my Goodreads ratings and using that representation to rank candidate books.
-
-The goal is not just to make recommendations, but to understand why the methods work and what the limitations are with a small personal dataset.
-
-### 3. Eventually incorporate mood/context
-
-In the future, I want recommendations to take into account how I feel when choosing a book.
-
-For example:
-
-> "I want something cozy and slow."
-
-or
-
-> "I'm anxious and need some escapism."
-
-This is **not part of the initial implementation**.
-
-However, the project should be designed so that contextual information can later be incorporated into the recommendation model without having to rebuild everything from scratch.
+- **What do my own ratings and reading habits look like?** — distribution, pace, genre spread, DNF patterns.
+- **Can a book's *content* (description, genre/subject tags) predict how much I'd like it?** — and what does "predict" even mean with only ~165 usable data points?
+- **Is my taste one coherent thing, or several?** — this turned out to be a central, non-obvious finding of the project (see Results below).
+- **When does comparing book content work well, and when does it have problems?** — for example, when there are very few similar books in a genre, when my rating depends on the quality of the writing rather than the book's topic, when different book descriptions use very similar promotional language, or when there is very little information available about a book.
 
 ## Data
 
-The starting point is a Goodreads CSV export containing information such as:
+Starting point: a Goodreads CSV export (~185 books) — ratings, shelves, dates read, ISBNs, page counts, authors, titles, and free-text reviews (written in a mix of Catalan, Spanish, and English).
 
-* Books read
-* Ratings
-* Shelves
-* Dates read
-* ISBNs
-* Page counts
-* Authors
-* Titles
-* Other Goodreads metadata
+Goodreads' raw export has real quirks that shaped the cleaning process: a `0` rating means *unrated*, not *zero stars*; ISBNs are wrapped in Excel-formula syntax; some books appear more than once under different titles (e.g. translated editions); dates arrive as strings.
 
-The project deliberately uses flat files and in-memory data structures.
+The project uses flat files and in-memory data structures throughout — no database, no ORM. External metadata (descriptions, genre/subject tags) is fetched from the Google Books and Open Library APIs and cached locally as JSON, so books are never re-fetched once resolved.
 
-There is:
+## Pipeline
 
-* No database
-* No ORM
-* No complex infrastructure
+**1. EDA** (`notebooks/01_eda`)
+Cleaned ratings (resolving the 0-rating ambiguity), parsed dates, cleaned ISBNs, resolved duplicate/mislabeled entries. Found: my ratings skew high (clustered 3–5), no strong page-length bias, and a small but real DNF signal.
 
-External book metadata will be fetched through APIs and cached locally so that the same books do not need to be requested repeatedly.
+**2. Metadata enrichment** (`src/enrich_data.py`)
+A two-API pipeline (Google Books for descriptions, Open Library for genre/subject tags) with idempotent local caching, ISBN-first lookup with title/author fallback, and per-source provenance tracking. 165 of 186 books successfully enriched; the remaining 21 fall back to title/author text with an explicit `has_content: False` flag rather than being dropped.
 
-## Planned approach
+**3. Dataset consolidation** (`src/build_dataset.py`)
+Merged enrichment data into one embedding-ready text field per book, with two dedicated cleaning passes: stripping HTML fragments, and filtering out promotional/commercial noise (bestseller-list mentions, movie-tie-in language, award names, library-cataloging tags) that were otherwise inflating similarity scores between unrelated books that merely shared a publisher's marketing boilerplate.
 
-1. **EDA**
+**4. Embeddings** (`src/embed_books.py`, explored in `notebooks/02`–`05`)
+Used `paraphrase-multilingual-MiniLM-L12-v2`, chosen specifically to handle the Catalan/Spanish content in my reviews and some descriptions. Verified the resulting space two ways: a nearest-neighbor spot-check (sequels correctly rank as each other's closest match) and a pairwise similarity distribution across the full library, which established that similarities cluster around ~0.32 with a distinct, sparse high-similarity tail, giving a real baseline for what "high similarity" means in this space, rather than treating raw cosine values as meaningful in isolation.
 
-   * Understand the Goodreads data
-   * Identify quirks and missing values
-   * Explore reading and rating patterns
+**5. Taste representation & recommendation** (`src/build_taste_vector.py`, `src/build_k_nearest_neighbours.py`, `notebooks/06`)
+Built and compared two representations of my taste:
 
-2. **Metadata enrichment**
+- **Centroid** — a single rating-weighted, mean-centered vector averaged across all rated books.
+- **k-Nearest Neighbors** — for each candidate book, its predicted score is derived from the ratings of its *k* most similar already-rated books, computed independently per candidate.
 
-   * Retrieve descriptions and genre/subject information
-   * Use ISBN13 where available
-   * Cache API results locally
+The centroid approach revealed a genuine structural limitation: my taste isn't one coherent direction in embedding space, it's several (fantasy vs. contemporary romance vs. literary fiction), and averaging across them caused real cancellation, books I rated 4–5 stars (*Pride and Prejudice*, *The Nightingale*, several romances) ended up with *negative* similarity to my own centroid. Leave-one-out validation (with a data-leakage bug caught and fixed along the way) confirmed this quantitatively: k-NN clearly outperforms the centroid specifically in the region where the centroid fails, though neither method reaches strong absolute correlation, an honest reflection of the dataset's size and diversity, not a bug to chase away.
 
-3. **Book embeddings**
+## Results & known limitations
 
-   * Combine relevant textual metadata
-   * Generate embeddings using a pretrained `sentence-transformers` model
-   * Explore what the resulting similarity space represents
+- The final k-NN scorer, applied to my `to-read` shelf, produces a ranked, confidence-annotated recommendation list (each candidate carries both a predicted score and the mean similarity of the neighbors it was based on), with low-content and fallback-only books explicitly excluded or flagged rather than silently mixed in.
+- **Content embeddings can't see writing quality.** A book I rated low despite genre-matching well against books I loved (weak dialogue, flat characters, per my own review) is a case content-based similarity simply cannot catch, a real, structural ceiling for this class of method, not a tuning problem.
+- **Sparse genres force weak matches.** With only ~165 reference books, `k=5` sometimes has to reach for mediocre neighbors in thin regions of the space (e.g. classics, literary fiction I've read little of), producing overconfident scores on weak evidence, visible directly by comparing predicted score against neighbor similarity.
+- **Generic promotional language and near-duplicate descriptions are a recurring artifact**, not a one-off bug, caught multiple times across the project (bestseller-list noise, ~0.98 similarity between books sharing identical publisher blurbs) and worth remaining alert to in any future extension.
 
-4. **Taste representation & recommendation**
+## Project Structure
 
-   * Use my Goodreads ratings as supervision
-   * Experiment with different representations of my preferences
-   * Rank candidate books based on similarity and/or learned features
+```
+data/
+├── raw/             # Original Goodreads export
+├── clean/           # Cleaned CSV from EDA
+├── enriched/        # API enrichment cache (enriched + not-enriched)
+├── embedding/       # Embedding-ready dataset, book vectors, and taste vector
+└── output/          # Saved plots and figures
 
-5. **Future: context-aware recommendations**
+notebooks/
+├── 01_eda
+├── 02_check_embeddings_original
+├── 03_check_embeddings_updated
+├── 04_explore_genres
+├── 05_explore_similarity_space
+└── 06_compare_taste_vector_kNN
 
-   * Introduce a context/mood representation
-   * Combine book representation with the reader's current context
-
-## Philosophy
-
-This is intentionally a small project.
-
-I want to:
-
-* Understand the concepts rather than just use libraries
-* Write the code myself and use review/discussion to improve it
-* Get something working quickly
-* Go deeper into the interesting ML/NLP parts
-* Use my own data rather than a generic Kaggle dataset
-
-The project should stay lean and exploratory rather than becoming a large software-engineering exercise.
+src/
+├── enrich_data.py
+├── build_dataset.py
+├── embed_books.py
+├── build_taste_vector.py
+└── build_k_nearest_neighbours.py
+```
 
 ## Tech stack
 
-* Python
-* pandas / NumPy
-* scikit-learn
-* Matplotlib / Seaborn
-* Open Library / Google Books API
-* sentence-transformers
-* Jupyter
+- Python — pandas / NumPy, scikit-learn, Matplotlib / Seaborn
+- `sentence-transformers` (`paraphrase-multilingual-MiniLM-L12-v2`)
+- Google Books API, Open Library API
+- Jupyter
+- Flat files only — no database, no ORM
 
-No database or ORM
+## Status
+
+The `master` branch represents a finished, working pipeline: raw Goodreads export in, validated content-based recommendations out, with the reasoning and limitations behind each design decision documented in the notebooks. Further exploration, adaptive/threshold-based neighbor selection, recency-weighted taste, incorporating my review text as an additional signal, and eventually mood/context-aware recommendations, will happen on separate branches rather than on `master`.

@@ -40,13 +40,20 @@ def score_candidate_knn(candidate_vector, eligible_vectors, eligible_ratings, me
     top_k_idx = similarities.argsort()[::-1][:k]
     # substract mean rating to those specific k books and average that
     neighbor_deviations = eligible_ratings[top_k_idx] - mean_rating
-    return neighbor_deviations.mean()
+
+    # KNN prediction
+    score = neighbor_deviations.mean()
+
+    # Mean similarity of the k neighbours actually used
+    mean_similarity = similarities[top_k_idx].mean()
+
+    return score, mean_similarity
 
 def validate_knn(eligible_vectors, eligible_ratings, eligible_ids, mean_rating, k=5):
     """Leave-one-out: predict each rated book from its neighbors, compare to reality."""
     results = []
     for i, book_id in enumerate(eligible_ids):
-        predicted = score_candidate_knn(
+        predicted, _ = score_candidate_knn(
             eligible_vectors[i], eligible_vectors, eligible_ratings,
             mean_rating, k=k, exclude_id=book_id, eligible_ids=eligible_ids
         )
@@ -57,10 +64,16 @@ def validate_knn(eligible_vectors, eligible_ratings, eligible_ids, mean_rating, 
 def score_to_read(to_read_df, to_read_vectors, eligible_vectors, eligible_ratings, mean_rating, k=5):
     """Score real candidates — no exclusion needed, they're not in the eligible set."""
     scores = []
+    mean_similarities = []
     for i in range(len(to_read_df)):
-        score = score_candidate_knn(to_read_vectors[i], eligible_vectors, eligible_ratings, mean_rating, k=k)
+        score, mean_similarity = score_candidate_knn(to_read_vectors[i], eligible_vectors, eligible_ratings, mean_rating, k=k)
         scores.append(score)
+        mean_similarities.append(mean_similarity)
+
     to_read_df["knn_score"] = scores
+    to_read_df["mean_neighbor_similarity"] = mean_similarities
+
+    to_read_df = to_read_df[to_read_df["has_content"] == True]
     return to_read_df.sort_values("knn_score", ascending=False)
 
 def main():
